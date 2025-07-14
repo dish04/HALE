@@ -15,47 +15,104 @@ class SingleLabelImageFolder(Dataset):
     def __init__(self, root, cls_num, transform=None, target_transform=None, modality='fundus', if_semi=False, test_file=None):
         super(SingleLabelImageFolder, self).__init__()
         self.cls_num = cls_num
-        self.modality = modality
-        if test_file is None:
-            file = 'large9cls.txt'
-            path_file = os.path.join(root, file)
+        self.modality = modality.lower()
+        
+        # Set up paths based on modality
+        if self.modality == 'fundus':
+            self.image_dir = os.path.join(root, 'ImageData/images')
+            self.label_file = os.path.join(root, 'large9cls.txt')
+        elif self.modality == 'oct':
+            root = root.replace('/assemble/', '/assemble_oct/')
+            self.image_dir = os.path.join(root, 'ImageData/images')
+            self.label_file = os.path.join(root, 'large9cls.txt')
         else:
-            path_file = test_file
-        self.root = '/'.join(os.path.split(root)[:-1])
+            raise ValueError(f"Unsupported modality: {modality}. Choose 'fundus' or 'oct'")
+            
+        # Verify required files exist
+        if not os.path.exists(self.image_dir):
+            raise FileNotFoundError(f"Image directory not found: {self.image_dir}")
+        if not os.path.exists(self.label_file):
+            raise FileNotFoundError(f"Label file not found: {self.label_file}")
+            
         self.transform = transform
         self.target_transform = target_transform
-        
         self.img2labels = {}
         self.imgs = []
         
-        with open(path_file, 'r') as f:
+        # Load image paths and labels
+        self._load_labels()
+        
+    def _load_labels(self):
+        """Load image paths and labels from the label file."""
+        with open(self.label_file, 'r') as f:
             lines = f.readlines()
-            for line in lines:
-                if test_file is not None:
-                    img_name = line.strip().split('\t')[0]
-                    label = int(line.strip().split('\t')[1])
-                else:
-                    img_name = line.strip().split(' ')[0]
-                    label = int(line.strip().split(' ')[1])
-          
-                self.imgs.append(img_name)
-                self.img2labels[img_name] = label
+            
+        for line in lines:
+            line = line.strip()
+            if not line:
+                continue
+                
+            # Handle different possible delimiters (space or tab)
+            if '\t' in line:
+                img_name, label = line.split('\t')[:2]
+            else:
+                parts = line.split()
+                if len(parts) < 2:
+                    continue
+                img_name, label = parts[0], parts[1]
+                
+            # Remove file extension if present
+            img_name = os.path.splitext(img_name)[0]
+            
+            try:
+                label = int(label)
+                if 0 <= label < self.cls_num:
+                    self.imgs.append(img_name)
+                    self.img2labels[img_name] = label
+            except (ValueError, IndexError):
+                print(f"Warning: Invalid label format in {self.label_file}: {line}")
 
     def __getitem__(self, index):
-        if self.modality == 'fundus':
-            img_path = os.path.join(self.root, 'train', 'ImageData', 'cfp-clahe-224x224', self.imgs[index] + '.png')
-        if self.modality == 'oct':
-            img_path = os.path.join(self.root, 'train', 'ImageData', 'oct-filter-448x448', self.imgs[index] + '.png')
-        img = Image.open(img_path).convert('RGB')
-        img_name = os.path.split(img_path)[-1][:-4]
-        # Get the labels for the corresponding image
-        label = self.img2labels[self.imgs[index]]
-        if self.transform is not None:
-            img = self.transform(img)
-        if self.target_transform is not None:
-            label = self.target_transform(label)
-
-        return img, label, img_name
+        img_name = self.imgs[index]
+        base_name = os.path.basename(img_name)  # In case full path is stored
+        
+        # Construct the image path
+        img_extensions = ['.png', '.jpg', '.jpeg', '.bmp', '.tiff']
+        img_path = None
+        
+        # Try different extensions if needed
+        for ext in img_extensions:
+            test_path = os.path.join(self.image_dir, f"{base_name}{ext}")
+            if os.path.exists(test_path):
+                img_path = test_path
+                break
+        
+        if img_path is None:
+            raise FileNotFoundError(f"Image {base_name} not found in {self.image_dir} with any common extension")
+        
+        try:
+            # Open and convert image
+            img = Image.open(img_path).convert('RGB')
+            
+            # Get the label for the corresponding image
+            label = self.img2labels[img_name]
+            
+            # Apply transforms if specified
+            if self.transform is not None:
+                img = self.transform(img)
+                
+            if self.target_transform is not None:
+                label = self.target_transform(label)
+            
+            return img, label, base_name
+            
+        except Exception as e:
+            print(f"Error loading image {img_path}: {str(e)}")
+            # If there's an error, try the next image in the dataset
+            next_index = (index + 1) % len(self)
+            if next_index == index:  # If there's only one image
+                raise
+            return self.__getitem__(next_index)
     
     def __len__(self):
         return len(self.imgs)

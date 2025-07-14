@@ -67,17 +67,33 @@ def main():
         7: "Wet_AMD"
     }
     
-    # Set paths (update these according to your directory structure)
-    data_dir = "/Users/dishantharya/Downloads/multieye_data"
+    # Set base data directory
+    base_data_dir = "/Users/dishantharya/Downloads/multieye_data"
+    data_dir = os.path.join(base_data_dir, "assemble/train")
     
-    # Create transforms
+    # Print directory structure for debugging
+    print("Current directory structure:")
+    print(f"Base directory: {base_data_dir}")
+    print(os.listdir(base_data_dir))
+    
+    # Check if required directories exist
+    required_dirs = [
+        os.path.join(data_dir, "ImageData/images"),
+        os.path.join(data_dir, "large9cls.txt")
+    ]
+    
+    for dir_path in required_dirs:
+        if not os.path.exists(dir_path):
+            raise FileNotFoundError(f"Required path not found: {dir_path}")
+    
+    print("\nCreating transforms...")
     train_transform = get_transforms(img_size=224, is_training=True)
     val_transform = get_transforms(img_size=224, is_training=False)
     
     # Create dataset
-    print("Creating training dataset...")
+    print("\nCreating training dataset...")
     train_dataset = SingleLabelImageFolder(
-        root=os.path.join(data_dir, "assemble/train"),
+        root=data_dir,
         cls_num=8,  # Number of classes
         transform=train_transform,
         modality='fundus',
