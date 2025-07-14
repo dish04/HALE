@@ -1,7 +1,7 @@
 import torch
 from torch.utils.data import DataLoader
 from torchvision import transforms
-from dataset import SingleLabelImageFolder
+from dataset import MultiModalEyeDataset
 import matplotlib.pyplot as plt
 import numpy as np
 
@@ -39,16 +39,20 @@ def visualize_sample(images, labels, class_names, num_samples=4):
             oct_img = oct_imgs[i].numpy().transpose((1, 2, 0))
             oct_img = np.clip((oct_img * [0.229, 0.224, 0.225] + [0.485, 0.456, 0.406]), 0, 1)
             
+            # Get label and class name
+            label_idx = labels[0][i]  # labels is a tuple of (tensor, class_names)
+            class_name = labels[1][i]  # Get the actual class name string
+            
             # Plot fundus image
             plt.subplot(2, num_samples, i + 1)
             plt.imshow(fundus_img)
-            plt.title(f"Fundus\n{class_names[labels[0][i]]}")
+            plt.title(f"Fundus\n{class_name}")
             plt.axis('off')
             
             # Plot OCT image
             plt.subplot(2, num_samples, i + 1 + num_samples)
             plt.imshow(oct_img)
-            plt.title(f"OCT\n{class_names[labels[1][i]]}")
+            plt.title(f"OCT\n{class_name}")
             plt.axis('off')
     
     plt.tight_layout()
@@ -69,63 +73,53 @@ def main():
     
     # Set base data directory
     base_data_dir = "/Users/dishantharya/Downloads/multieye_data"
-    data_dir = os.path.join(base_data_dir, "assemble/train")
     
-    # Print directory structure for debugging
-    print("Current directory structure:")
-    print(f"Base directory: {base_data_dir}")
-    print(os.listdir(base_data_dir))
-    
-    # Check if required directories exist
-    required_dirs = [
-        os.path.join(data_dir, "ImageData/images"),
-        os.path.join(data_dir, "large9cls.txt")
-    ]
-    
-    for dir_path in required_dirs:
-        if not os.path.exists(dir_path):
-            raise FileNotFoundError(f"Required path not found: {dir_path}")
-    
-    print("\nCreating transforms...")
-    train_transform = get_transforms(img_size=224, is_training=True)
-    val_transform = get_transforms(img_size=224, is_training=False)
-    
-    # Create dataset
-    print("\nCreating training dataset...")
-    train_dataset = SingleLabelImageFolder(
-        root=data_dir,
-        cls_num=8,  # Number of classes
-        transform=train_transform,
-        modality='fundus',
-        if_semi=False
-    )
-    
-    # Create data loader
+    # Data loading parameters
     batch_size = 8
-    train_loader = DataLoader(
-        train_dataset,
-        batch_size=batch_size,
-        shuffle=True,
-        num_workers=4,
-        pin_memory=True
-    )
+    num_workers = 4
     
-    # Get a batch of data
-    print("Loading a batch of data...")
-    batch = next(iter(train_loader))
+    # Create transforms
+    transform = get_transforms(img_size=224, is_training=True)
     
-    if isinstance(batch, tuple) and len(batch) == 3:
-        (fundus_imgs, oct_imgs), (fundus_labels, oct_labels), (f_names, o_names) = batch
-        print(f"Batch size: {len(fundus_imgs)}")
-        print(f"Fundus images shape: {fundus_imgs.shape}")
-        print(f"OCT images shape: {oct_imgs.shape}")
-        print(f"Fundus labels: {fundus_labels}")
-        print(f"OCT labels: {oct_labels}")
+    try:
+        # Create dataset
+        print("Loading dataset...")
+        dataset = MultiModalEyeDataset(
+            split='train',  # or 'val' if you want to visualize validation data
+            transform=transform
+        )
+        
+        # Create dataloader
+        dataloader = DataLoader(
+            dataset,
+            batch_size=batch_size,
+            shuffle=True,
+            num_workers=num_workers,
+            pin_memory=True
+        )
+        
+        # Get a batch of data
+        batch = next(iter(dataloader))
+        (fundus_images, oct_images), (labels, class_names_list), img_paths = batch
+        
+        # Print dataset information
+        print(f"Number of training samples: {len(dataset)}")
+        print(f"Number of classes: {len(dataset.classes)}")
+        print(f"Class names: {', '.join(dataset.classes)}")
+        print(f"Batch size: {batch_size}")
         
         # Visualize samples
-        visualize_sample((fundus_imgs, oct_imgs), (fundus_labels, oct_labels), class_names)
-    else:
-        print("Unexpected batch format:", [type(x) for x in batch])
+        print("Visualizing samples...")
+        visualize_sample(
+            (fundus_images, oct_images),
+            (labels, class_names_list),
+            class_names
+        )
+        
+    except FileNotFoundError as e:
+        print(f"Error: {e}")
+        print("Please make sure the dataset is properly prepared and the paths are correct.")
+        print("You may need to run prepare_dataset.py first.")
 
 if __name__ == "__main__":
     import os

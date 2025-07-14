@@ -143,7 +143,7 @@ class MultiModalEyeDataset(Dataset):
         """
         Args:
             split: One of 'train', 'val', or 'test'
-            transform: Optional transform to be applied to each image
+            transform: Transform to be applied to fundus images (OCT images will use the same transform)
         """
         self.split = split
         self.transform = transform
@@ -168,27 +168,103 @@ class MultiModalEyeDataset(Dataset):
         # Load samples
         self.samples = self._load_samples()
         
+        if len(self.samples) == 0:
+            raise RuntimeError(f"No samples found in {self.fundus_dir} and {self.oct_dir}")
+            
         print(f"Loaded {len(self.samples)} {split} samples with {len(self.classes)} classes")
     
     def _load_samples(self):
         """Load samples from the dataset directory."""
         samples = []
         
+        # Supported image extensions
+        img_extensions = {'.jpg', '.jpeg', '.png', '.bmp', '.tif', '.tiff'}
+        
         # Iterate through each class directory
         for class_name in self.classes:
             class_idx = self.class_to_idx[class_name]
-
-        for i, label in self.f_img2labels.items():
+            
+            # Get list of fundus and OCT images for this class
+            fundus_class_dir = self.fundus_dir / class_name
+            oct_class_dir = self.oct_dir / class_name
+            
+            if not fundus_class_dir.exists() or not oct_class_dir.exists():
+                print(f"Warning: Missing directory for class {class_name} in either fundus or OCT data")
+                continue
+                
+            # Get all fundus images
+            fundus_images = []
+            for ext in img_extensions:
+                fundus_images.extend(list(fundus_class_dir.glob(f'*{ext}')))
+                fundus_images.extend(list(fundus_class_dir.glob(f'*{ext.upper()}')))
+                
+            # Match each fundus image with its corresponding OCT image
+            for fundus_img in fundus_images:
+                img_name = fundus_img.name
+                oct_img = oct_class_dir / img_name
+                
+                # Check if OCT image exists (with any extension)
+                oct_exists = False
+                for ext in img_extensions:
+                    test_path = oct_class_dir / f"{fundus_img.stem}{ext}"
+                    if test_path.exists():
+                        oct_img = test_path
+                        oct_exists = True
+                        break
+                        
+                if oct_exists:
+                    samples.append({
+                        'fundus': str(fundus_img),
+                        'oct': str(oct_img),
+                        'label': class_idx,
+                        'class_name': class_name
+                    })
+        
+        return samples
+    
+    def __len__(self):
+        return len(self.samples)
+    
+    def __getitem__(self, idx):
+        sample = self.samples[idx]
+        
+        # Load fundus image
+        fundus_img = Image.open(sample['fundus']).convert('RGB')
+        
+        # Load OCT image
+        oct_img = Image.open(sample['oct']).convert('RGB')
+        
+        # Apply transforms if specified
+        if self.transform is not None:
+            fundus_img = self.transform(fundus_img)
+            oct_img = self.transform(oct_img)  # Same transform for both modalities
+        
+        return (fundus_img, oct_img), (sample['label'], sample['class_name']), sample['fundus']
+    
+    def label_statistics(self):
+        """Count number of samples per class."""
+        cls_count = {}
+        for sample in self.samples:
+            label = sample['label']
+            if label not in cls_count:
+                cls_count[label] = 0
             cls_count[label] += 1
         return cls_count
             
     def label_weights_for_balance(self):
+        """Calculate weights for class balancing."""
         cls_count = self.label_statistics()
-        labels_weight_list = []
-        for i, label in self.f_img2labels.items():
-            weight = 1 / cls_count[label]
-            labels_weight_list.append(weight)
-        return labels_weight_list
+        if not cls_count:
+            return []
+            
+        max_count = max(cls_count.values())
+        weights = {}
+        for cls, count in cls_count.items():
+            weights[cls] = max_count / count if count > 0 else 0.0
+            
+        # Create weights for each sample
+        sample_weights = [weights[sample['label']] for sample in self.samples]
+        return sample_weights
 
 
 def build_dataset_single(mode, args, transform=None, mod='fundus', test_file=None):

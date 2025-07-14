@@ -10,7 +10,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 
 from config import config
-from dataset import MultiModalSingleImageFolder
+from dataset import MultiModalEyeDataset
 from model import VisionTransformerWithGradCAM
 
 def get_transforms(is_training=False):
@@ -30,7 +30,7 @@ def get_transforms(is_training=False):
     ])
 
 def create_data_loaders(subset_ratio=1.0):
-    """Create train and validation data loaders
+    """Create train and validation data loaders from processed dataset
     
     Args:
         subset_ratio: float, fraction of the dataset to use (0.0 to 1.0)
@@ -39,60 +39,47 @@ def create_data_loaders(subset_ratio=1.0):
     train_transform = get_transforms(is_training=True)
     val_transform = get_transforms(is_training=False)
     
-    # Check if validation directories exist
-    fundus_val_path = os.path.join(config.data_dir, "assemble/dev")
-    oct_val_path = os.path.join(config.data_dir, "assemble_oct/dev")
-    
-    # Create full training dataset first
-    full_dataset = MultiModalSingleImageFolder(
-        fundus_root=os.path.join(config.data_dir, "assemble/train"),
-        oct_root=os.path.join(config.data_dir, "assemble_oct/train"),
-        cls_num=config.num_classes,
-        mode='train',
-        transform=train_transform,
-        transform_oct=train_transform
+    # Create training dataset
+    train_dataset = MultiModalEyeDataset(
+        split='train',
+        transform=train_transform
     )
     
     # If subset_ratio is less than 1.0, take a subset of the data
     if subset_ratio < 1.0:
-        subset_size = int(len(full_dataset) * subset_ratio)
-        indices = torch.randperm(len(full_dataset))[:subset_size]
-        full_dataset = torch.utils.data.Subset(full_dataset, indices)
-        print(f"Using subset of {subset_size} samples ({subset_ratio*100:.1f}% of full dataset)")
+        subset_size = int(len(train_dataset) * subset_ratio)
+        indices = torch.randperm(len(train_dataset))[:subset_size]
+        train_dataset = torch.utils.data.Subset(train_dataset, indices)
+        print(f"Using subset of {subset_size} training samples ({subset_ratio*100:.1f}% of full dataset)")
     
-    # If validation directories exist, use them
-    if os.path.exists(fundus_val_path) and os.path.exists(oct_val_path):
-        print("Using separate validation set...")
-        train_dataset = full_dataset
-        val_dataset = MultiModalSingleImageFolder(
-            fundus_root=fundus_val_path,
-            oct_root=oct_val_path,
-            cls_num=config.num_classes,
-            mode='val',
-            transform=val_transform,
-            transform_oct=val_transform
+    # Try to load validation set, if it exists
+    try:
+        val_dataset = MultiModalEyeDataset(
+            split='val',
+            transform=val_transform
         )
-    else:
-        print("Validation directories not found. Splitting training data...")
+        print(f"Using separate validation set with {len(val_dataset)} samples")
+    except FileNotFoundError:
+        print("Validation set not found. Splitting training data...")
         # Split the training data into train/val (80/20)
-        train_size = int(0.8 * len(full_dataset))
-        val_size = len(full_dataset) - train_size
+        train_size = int(0.8 * len(train_dataset))
+        val_size = len(train_dataset) - train_size
         train_dataset, val_dataset = torch.utils.data.random_split(
-            full_dataset, [train_size, val_size],
+            train_dataset, [train_size, val_size],
             generator=torch.Generator().manual_seed(42)  # For reproducibility
         )
-        # Apply validation transforms to validation set
-        val_dataset.dataset.transform = val_transform
-        val_dataset.dataset.transform_oct = val_transform
+        print(f"Split training data into {train_size} training and {val_size} validation samples")
     
+    # Create data loaders
     train_loader = DataLoader(
         train_dataset,
         batch_size=config.batch_size,
         shuffle=True,
         num_workers=4,
-        pin_memory=True
+        pin_memory=True,
+        drop_last=True  # Drop last incomplete batch
     )
-    
+
     val_loader = DataLoader(
         val_dataset,
         batch_size=config.batch_size,
@@ -100,6 +87,9 @@ def create_data_loaders(subset_ratio=1.0):
         num_workers=4,
         pin_memory=True
     )
+    
+    print(f"Created dataloaders - Train: {len(train_loader.dataset)} samples, "
+          f"Val: {len(val_loader.dataset)} samples")
     
     return train_loader, val_loader
 
