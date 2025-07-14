@@ -54,24 +54,56 @@ class DatasetPreprocessor:
         for modality, src_dir in [('fundus', 'assemble'), ('oct', 'assemble_oct')]:
             print(f"\nProcessing {modality} images...")
             
+            # Set up paths based on modality
+            if modality == 'fundus':
+                image_dir = self.raw_data_dir / src_dir / 'train' / 'ImageData' / 'images'
+                label_file = self.raw_data_dir / src_dir / 'train' / 'large9cls.txt'
+            else:
+                image_dir = self.raw_data_dir / src_dir / 'train' / 'ImageData' / 'images'
+                label_file = self.raw_data_dir / src_dir / 'train' / 'large9cls.txt'
+            
+            # Check if paths exist
+            if not image_dir.exists():
+                print(f"Image directory not found: {image_dir}")
+                continue
+                
+            if not label_file.exists():
+                print(f"Label file not found: {label_file}")
+                continue
+            
             # Read all image paths and labels
             data = []
-            for split in ['train', 'dev', 'test']:
-                label_file = self.raw_data_dir / src_dir / split / 'large9cls.txt'
-                if not label_file.exists():
-                    print(f"Warning: {label_file} not found, skipping...")
-                    continue
-                    
-                with open(label_file, 'r') as f:
-                    for line in f:
-                        img_name, label = line.strip().split()
-                        img_path = self.raw_data_dir / src_dir / split / 'ImageData' / img_name
-                        if img_path.exists():
-                            data.append({
-                                'path': img_path,
-                                'label': int(label),
-                                'split': split
-                            })
+            image_extensions = ['.png', '.jpg', '.jpeg', '.bmp', '.tiff']
+            
+            # First, read all labels
+            with open(label_file, 'r') as f:
+                for line in f:
+                    try:
+                        parts = line.strip().split()
+                        if len(parts) < 2:
+                            continue
+                            
+                        img_name = parts[0]
+                        label = int(parts[1])
+                        
+                        # Try different extensions
+                        found = False
+                        for ext in image_extensions:
+                            img_path = image_dir / f"{img_name}{ext}"
+                            if img_path.exists():
+                                data.append({
+                                    'path': img_path,
+                                    'label': label,
+                                    'split': 'train'  # All data is in train, we'll split it
+                                })
+                                found = True
+                                break
+                                
+                        if not found:
+                            print(f"Warning: Image not found for {img_name} with any extension")
+                            
+                    except Exception as e:
+                        print(f"Error processing line: {line.strip()}. Error: {e}")
             
             if not data:
                 print(f"No data found for {modality}, skipping...")
