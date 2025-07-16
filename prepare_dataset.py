@@ -22,8 +22,8 @@ class DatasetPreprocessor:
         
         # Define class names based on your labels
         self.class_names = [
-            'normal', 'damd', 'csc', 'dr', 
-            'glc', 'mem', 'rvo', 'wamd'
+            'Normal', 'Dry_AMD', 'CSC', 'DR',
+            'Glaucoma', 'MEM', 'RVO', 'Wet_AMD'
         ]
         
     def create_directory_structure(self):
