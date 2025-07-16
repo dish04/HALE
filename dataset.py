@@ -162,10 +162,10 @@ class MultiModalEyeDataset(Dataset):
                 f"- {self.oct_dir}"
             )
         
-        # Define class names based on your labels
+        # Define class names based on folder structure
         self.class_names = [
-            'Normal', 'Dry_AMD', 'CSC', 'DR',
-            'Glaucoma', 'MEM', 'RVO', 'Wet_AMD'
+            'normal', 'damd', 'csc', 'dr',
+            'glc', 'mem', 'rvo', 'wamd'
         ]
         
         # Get list of classes
@@ -191,12 +191,18 @@ class MultiModalEyeDataset(Dataset):
         for class_name in self.classes:
             class_idx = self.class_to_idx[class_name]
             
-            # The images are in class_name/images/ directory
-            fundus_class_dir = self.fundus_dir / class_name / 'images'
-            oct_class_dir = self.oct_dir / class_name / 'images'
+            # The images are directly in the class directory
+            fundus_class_dir = self.fundus_dir / class_name
+            oct_class_dir = self.oct_dir / class_name
             
-            print(f"Looking for images in: {fundus_class_dir}")
+            print(f"Looking for fundus images in: {fundus_class_dir}")
             print(f"Looking for OCT images in: {oct_class_dir}")
+            
+            # Debug: List files in the directory
+            if fundus_class_dir.exists():
+                print(f"Found {len(list(fundus_class_dir.glob('*')))} files in {fundus_class_dir}")
+            if oct_class_dir.exists():
+                print(f"Found {len(list(oct_class_dir.glob('*')))} files in {oct_class_dir}")
             
             if not fundus_class_dir.exists() or not oct_class_dir.exists():
                 print(f"Warning: Missing directory for class {class_name} in either fundus or OCT data")

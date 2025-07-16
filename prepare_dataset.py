@@ -20,10 +20,10 @@ class DatasetPreprocessor:
         # Create necessary directories
         self.processed_dir.mkdir(exist_ok=True)
         
-        # Define class names based on your labels
+        # Define class names based on folder structure
         self.class_names = [
-            'Normal', 'Dry_AMD', 'CSC', 'DR',
-            'Glaucoma', 'MEM', 'RVO', 'Wet_AMD'
+            'normal', 'damd', 'csc', 'dr',
+            'glc', 'mem', 'rvo', 'wamd'
         ]
         
     def create_directory_structure(self):
@@ -33,9 +33,9 @@ class DatasetPreprocessor:
             for modality in ['fundus', 'oct']:
                 split_dir = self.processed_dir / split / modality
                 
-                # Create class directories with 'images' subdirectory
+                # Create class directories
                 for cls_name in self.class_names:
-                    class_dir = split_dir / cls_name / 'images'
+                    class_dir = split_dir / cls_name
                     class_dir.mkdir(parents=True, exist_ok=True)
     
     def process_dataset(self, test_size=0.2, val_size=0.1, random_state=42):
@@ -141,7 +141,7 @@ class DatasetPreprocessor:
                         continue
                         
                     cls_name = self.class_names[label]
-                    dst_dir = self.processed_dir / split_name / modality / cls_name / 'images'
+                    dst_dir = self.processed_dir / split_name / modality / cls_name
                     
                     # Copy image
                     try:
