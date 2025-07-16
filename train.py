@@ -48,15 +48,16 @@ def create_data_loaders(subset_ratio=1.0):
     print(f"Using dataset directory: {dataset_dir.absolute()}")
     
     # Create training dataset
-    try:
-        train_dataset = MultiModalEyeDataset(
-            split='train',
-            transform=train_transform
-        )
+    train_dataset = MultiModalEyeDataset(
+        split='train',
+        transform=train_transform
+    )
+    
+    if len(train_dataset) == 0:
+        print("Warning: Training dataset is empty. Please check your dataset directory.")
+        print(f"Expected data in: {Path('dataset/train/fundus')} and {Path('dataset/train/oct')}")
+    else:
         print(f"Successfully loaded training dataset with {len(train_dataset)} samples")
-    except Exception as e:
-        print(f"Error loading training dataset: {e}")
-        raise
     
     # If subset_ratio is less than 1.0, take a subset of the data
     if subset_ratio < 1.0:
@@ -66,16 +67,18 @@ def create_data_loaders(subset_ratio=1.0):
         print(f"Using subset of {subset_size} training samples ({subset_ratio*100:.1f}% of full dataset)")
     
     # Try to load validation set, if it exists
-    try:
-        val_dataset = MultiModalEyeDataset(
-            split='val',
-            transform=val_transform
-        )
-        print(f"Successfully loaded validation dataset with {len(val_dataset)} samples")
-    except FileNotFoundError as e:
-        print(f"Validation set not found at {dataset_dir}/val. Error: {e}")
+    val_dataset = MultiModalEyeDataset(
+        split='val',
+        transform=val_transform
+    )
+    
+    if len(val_dataset) == 0:
+        print(f"Warning: Validation dataset is empty at {dataset_dir}/val")
         print("Splitting training data into train/val (80/20) instead...")
         
+        if len(train_dataset) == 0:
+            raise RuntimeError("Cannot split empty training dataset. Please check your dataset directory.")
+            
         # Split the training data into train/val (80/20)
         train_size = int(0.8 * len(train_dataset))
         val_size = len(train_dataset) - train_size
@@ -84,9 +87,8 @@ def create_data_loaders(subset_ratio=1.0):
             generator=torch.Generator().manual_seed(42)  # For reproducibility
         )
         print(f"Split training data into {train_size} training and {val_size} validation samples")
-    except Exception as e:
-        print(f"Error loading validation dataset: {e}")
-        raise
+    else:
+        print(f"Successfully loaded validation dataset with {len(val_dataset)} samples")
     
     # Create data loaders
     train_loader = DataLoader(

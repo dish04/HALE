@@ -176,11 +176,14 @@ class MultiModalEyeDataset(Dataset):
         self.classes = sorted(fundus_classes.intersection(oct_classes))
         
         if not self.classes:
-            raise RuntimeError(
-                f"No common classes found between {self.fundus_dir} and {self.oct_dir}\n"
-                f"Fundus classes: {sorted(fundus_classes)}\n"
-                f"OCT classes: {sorted(oct_classes)}"
-            )
+            print(f"Warning: No common classes found between {self.fundus_dir} and {self.oct_dir}")
+            print(f"Fundus classes: {sorted(fundus_classes)}")
+            print(f"OCT classes: {sorted(oct_classes)}")
+            # Initialize with empty samples
+            self.samples = []
+            self.class_to_idx = {}
+            print(f"Initialized empty dataset for {split} split")
+            return
             
         self.class_to_idx = {cls_name: i for i, cls_name in enumerate(self.classes)}
         
@@ -188,12 +191,12 @@ class MultiModalEyeDataset(Dataset):
         self.samples = self._load_samples()
         
         if len(self.samples) == 0:
-            raise RuntimeError(
-                f"No valid samples found. Checked directories:\n"
-                f"Fundus: {self.fundus_dir}\n"
-                f"OCT: {self.oct_dir}\n"
-                f"Classes: {self.classes}"
-            )
+            print(f"Warning: No valid samples found in {self.fundus_dir} and {self.oct_dir}")
+            print(f"Checked classes: {self.classes}")
+            # Initialize with empty samples
+            self.samples = []
+            print(f"Initialized empty dataset for {split} split")
+            return
             
         print(f"Loaded {len(self.samples)} {split} samples with {len(self.classes)} classes")
     
