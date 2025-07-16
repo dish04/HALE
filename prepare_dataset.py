@@ -11,20 +11,36 @@ class DatasetPreprocessor:
         Initialize the dataset preprocessor.
         
         Args:
-            raw_data_dir: Directory containing the raw dataset
-            processed_dir: Directory where processed dataset will be saved
+            root_dir: Root directory containing the raw and processed datasets
         """
-        self.raw_data_dir = Path(raw_data_dir)
-        self.processed_dir = Path(processed_dir)
+        self.root_dir = Path(root_dir)
+        self.raw_data_dir = self.root_dir / 'raw'
+        self.processed_dir = self.root_dir / 'processed'
         
         # Create necessary directories
+        self.raw_data_dir.mkdir(exist_ok=True)
         self.processed_dir.mkdir(exist_ok=True)
         
-        # Define class names based on folder structure
+        # Define the class names (8 classes as per the paper) - all lowercase
         self.class_names = [
-            'normal', 'damd', 'csc', 'dr',
+            'normal', 'damd', 'csc', 'dr', 
             'glc', 'mem', 'rvo', 'wamd'
         ]
+        
+        # Map from any case to our standard lowercase names
+        self.class_name_map = {
+            'normal': 'normal',
+            'dry_amd': 'damd',
+            'damd': 'damd',
+            'csc': 'csc',
+            'dr': 'dr',
+            'glaucoma': 'glc',
+            'glc': 'glc',
+            'mem': 'mem',
+            'rvo': 'rvo',
+            'wet_amd': 'wamd',
+            'wamd': 'wamd'
+        }
         
     def create_directory_structure(self):
         """Create the required directory structure for the processed dataset."""
@@ -33,9 +49,10 @@ class DatasetPreprocessor:
             for modality in ['fundus', 'oct']:
                 split_dir = self.processed_dir / split / modality
                 
-                # Create class directories
+                # Create class directories (all lowercase)
                 for cls_name in self.class_names:
-                    class_dir = split_dir / cls_name
+                    # Ensure the directory name is lowercase
+                    class_dir = split_dir / cls_name.lower()
                     class_dir.mkdir(parents=True, exist_ok=True)
     
     def process_dataset(self, test_size=0.2, val_size=0.1, random_state=42):
@@ -140,7 +157,9 @@ class DatasetPreprocessor:
                     if label >= len(self.class_names):
                         continue
                         
-                    cls_name = self.class_names[label]
+                    # Get the class name and ensure it's in our standard format
+                    original_name = self.class_names[label]
+                    cls_name = self.class_name_map.get(original_name.lower(), original_name.lower())
                     dst_dir = self.processed_dir / split_name / modality / cls_name
                     
                     # Copy image

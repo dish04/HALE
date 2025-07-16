@@ -168,12 +168,18 @@ class MultiModalEyeDataset(Dataset):
             'glc', 'mem', 'rvo', 'wamd'
         ]
         
-        # Get list of classes from both fundus and oct directories
-        fundus_classes = set(d.name for d in self.fundus_dir.iterdir() if d.is_dir())
-        oct_classes = set(d.name for d in self.oct_dir.iterdir() if d.is_dir())
+        # Get list of classes from both fundus and oct directories (convert to lowercase)
+        fundus_classes = set(d.name.lower() for d in self.fundus_dir.iterdir() if d.is_dir())
+        oct_classes = set(d.name.lower() for d in self.oct_dir.iterdir() if d.is_dir())
         
         # Only use classes that exist in both directories
-        self.classes = sorted(fundus_classes.intersection(oct_classes))
+        common_classes = fundus_classes.intersection(oct_classes)
+        
+        # Define the expected class names (lowercase only)
+        expected_classes = {'normal', 'damd', 'csc', 'dr', 'glc', 'mem', 'rvo', 'wamd'}
+        
+        # Only keep classes that are in our expected set
+        self.classes = sorted(common_classes.intersection(expected_classes))
         
         if not self.classes:
             print(f"Warning: No common classes found between {self.fundus_dir} and {self.oct_dir}")
@@ -199,6 +205,23 @@ class MultiModalEyeDataset(Dataset):
             return
             
         print(f"Loaded {len(self.samples)} {split} samples with {len(self.classes)} classes")
+    
+    def _get_lowercase_class_mapping(self, class_name):
+        """Map a class name to its lowercase version."""
+        # Convert to lowercase and handle any special cases
+        lower_name = class_name.lower()
+        # Map any variations to standard names
+        name_map = {
+            'dry_amd': 'damd',
+            'wet_amd': 'wamd',
+            'glaucoma': 'glc',
+            'normal': 'normal',
+            'csc': 'csc',
+            'dr': 'dr',
+            'mem': 'mem',
+            'rvo': 'rvo'
+        }
+        return name_map.get(lower_name, lower_name)
     
     def _load_samples(self):
         """Load samples from the dataset directory."""
@@ -234,9 +257,17 @@ class MultiModalEyeDataset(Dataset):
             print("\n" + "-"*50)
             print(f"Processing class: {class_name} (index: {class_idx})")
             
-            # The images are directly in the class directory
-            fundus_class_dir = self.fundus_dir / class_name
-            oct_class_dir = self.oct_dir / class_name
+            # Find the actual directory name (case-insensitive)
+            def find_case_insensitive_dir(base_dir, target_name):
+                target_lower = target_name.lower()
+                for d in base_dir.iterdir():
+                    if d.is_dir() and d.name.lower() == target_lower:
+                        return d
+                return base_dir / target_name  # Return expected path if not found
+            
+            # Get the actual directory paths (case-insensitive)
+            fundus_class_dir = find_case_insensitive_dir(self.fundus_dir, class_name)
+            oct_class_dir = find_case_insensitive_dir(self.oct_dir, class_name)
             
             print(f"Fundus class dir: {fundus_class_dir}")
             print(f"OCT class dir: {oct_class_dir}")
