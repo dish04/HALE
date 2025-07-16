@@ -168,15 +168,32 @@ class MultiModalEyeDataset(Dataset):
             'glc', 'mem', 'rvo', 'wamd'
         ]
         
-        # Get list of classes
-        self.classes = sorted([d.name for d in self.fundus_dir.iterdir() if d.is_dir()])
+        # Get list of classes from both fundus and oct directories
+        fundus_classes = set(d.name for d in self.fundus_dir.iterdir() if d.is_dir())
+        oct_classes = set(d.name for d in self.oct_dir.iterdir() if d.is_dir())
+        
+        # Only use classes that exist in both directories
+        self.classes = sorted(fundus_classes.intersection(oct_classes))
+        
+        if not self.classes:
+            raise RuntimeError(
+                f"No common classes found between {self.fundus_dir} and {self.oct_dir}\n"
+                f"Fundus classes: {sorted(fundus_classes)}\n"
+                f"OCT classes: {sorted(oct_classes)}"
+            )
+            
         self.class_to_idx = {cls_name: i for i, cls_name in enumerate(self.classes)}
         
         # Load samples
         self.samples = self._load_samples()
         
         if len(self.samples) == 0:
-            raise RuntimeError(f"No samples found in {self.fundus_dir} and {self.oct_dir}")
+            raise RuntimeError(
+                f"No valid samples found. Checked directories:\n"
+                f"Fundus: {self.fundus_dir}\n"
+                f"OCT: {self.oct_dir}\n"
+                f"Classes: {self.classes}"
+            )
             
         print(f"Loaded {len(self.samples)} {split} samples with {len(self.classes)} classes")
     
@@ -187,6 +204,9 @@ class MultiModalEyeDataset(Dataset):
         # Supported image extensions
         img_extensions = {'.jpg', '.jpeg', '.png', '.bmp', '.tif', '.tiff'}
         
+        # Track statistics
+        total_pairs = 0
+        
         # Iterate through each class directory
         for class_name in self.classes:
             class_idx = self.class_to_idx[class_name]
@@ -195,47 +215,65 @@ class MultiModalEyeDataset(Dataset):
             fundus_class_dir = self.fundus_dir / class_name
             oct_class_dir = self.oct_dir / class_name
             
-            print(f"Looking for fundus images in: {fundus_class_dir}")
-            print(f"Looking for OCT images in: {oct_class_dir}")
+            print(f"\nProcessing class: {class_name}")
+            print(f"Fundus dir: {fundus_class_dir}")
+            print(f"OCT dir: {oct_class_dir}")
             
-            # Debug: List files in the directory
-            if fundus_class_dir.exists():
-                print(f"Found {len(list(fundus_class_dir.glob('*')))} files in {fundus_class_dir}")
-            if oct_class_dir.exists():
-                print(f"Found {len(list(oct_class_dir.glob('*')))} files in {oct_class_dir}")
-            
-            if not fundus_class_dir.exists() or not oct_class_dir.exists():
-                print(f"Warning: Missing directory for class {class_name} in either fundus or OCT data")
+            # Check if directories exist
+            if not fundus_class_dir.exists():
+                print(f"Warning: Fundus directory not found: {fundus_class_dir}")
                 continue
                 
+            if not oct_class_dir.exists():
+                print(f"Warning: OCT directory not found: {oct_class_dir}")
+                continue
+            
             # Get all fundus images
             fundus_images = []
             for ext in img_extensions:
-                fundus_images.extend(list(fundus_class_dir.glob(f'*{ext}')))
-                fundus_images.extend(list(fundus_class_dir.glob(f'*{ext.upper()}')))
-                
-            # Match each fundus image with its corresponding OCT image
-            for fundus_img in fundus_images:
-                img_name = fundus_img.name
-                oct_img = oct_class_dir / img_name
-                
-                # Check if OCT image exists (with any extension)
-                oct_exists = False
-                for ext in img_extensions:
-                    test_path = oct_class_dir / f"{fundus_img.stem}{ext}"
-                    if test_path.exists():
-                        oct_img = test_path
-                        oct_exists = True
-                        break
-                        
-                if oct_exists:
-                    samples.append({
-                        'fundus': str(fundus_img),
-                        'oct': str(oct_img),
-                        'label': class_idx,
-                        'class_name': class_name
-                    })
+                fundus_images.extend(fundus_class_dir.glob(f'*{ext}'))
+                fundus_images.extend(fundus_class_dir.glob(f'*{ext.upper()}'))
+            
+            # Get all OCT images
+            oct_images = []
+            for ext in img_extensions:
+                oct_images.extend(oct_class_dir.glob(f'*{ext}'))
+                oct_images.extend(oct_class_dir.glob(f'*{ext.upper()}'))
+            
+            print(f"Found {len(fundus_images)} fundus images and {len(oct_images)} OCT images")
+            
+            # Create dictionaries mapping image IDs to paths
+            fundus_dict = {f.stem.split('.')[0].upper(): f for f in fundus_images}
+            oct_dict = {o.stem.split('.')[0].upper(): o for o in oct_images}
+            
+            # Find common image IDs (case-insensitive)
+            common_ids = set(fundus_dict.keys()) & set(oct_dict.keys())
+            
+            if not common_ids:
+                print(f"Warning: No matching fundus/OCT pairs found for class {class_name}")
+                # Try to find potential matches for debugging
+                fundus_ids = set(fundus_dict.keys())
+                oct_ids = set(oct_dict.keys())
+                print(f"Fundus IDs: {len(fundus_ids)}, OCT IDs: {len(oct_ids)}")
+                print(f"Sample fundus IDs: {list(fundus_ids)[:3]}")
+                print(f"Sample OCT IDs: {list(oct_ids)[:3]}")
+                continue
+            
+            # Add samples
+            class_samples = []
+            for img_id in common_ids:
+                class_samples.append({
+                    'fundus': str(fundus_dict[img_id]),
+                    'oct': str(oct_dict[img_id]),
+                    'label': class_idx,
+                    'class_name': class_name
+                })
+            
+            print(f"Found {len(class_samples)} valid pairs for class {class_name}")
+            samples.extend(class_samples)
+            total_pairs += len(class_samples)
         
+        print(f"\nTotal pairs loaded: {total_pairs}")
         return samples
     
     def __len__(self):
