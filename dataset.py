@@ -148,9 +148,10 @@ class MultiModalEyeDataset(Dataset):
         self.split = split
         self.transform = transform
         
-        # Get paths for the specified split
-        self.fundus_dir = config.processed_data_dir / split / 'fundus'
-        self.oct_dir = config.processed_data_dir / split / 'oct'
+        # Get paths for the specified split - using the new directory structure
+        dataset_root = Path('dataset')  # Assuming the dataset is in a 'dataset' directory
+        self.fundus_dir = dataset_root / split / 'fundus'
+        self.oct_dir = dataset_root / split / 'oct'
         
         # Verify directories exist
         if not self.fundus_dir.exists() or not self.oct_dir.exists():
@@ -185,8 +186,9 @@ class MultiModalEyeDataset(Dataset):
             class_idx = self.class_to_idx[class_name]
             
             # Get list of fundus and OCT images for this class
-            fundus_class_dir = self.fundus_dir / class_name
-            oct_class_dir = self.oct_dir / class_name
+            # Look in the 'images' subdirectory for each class
+            fundus_class_dir = self.fundus_dir / class_name / 'images'
+            oct_class_dir = self.oct_dir / class_name / 'images'
             
             if not fundus_class_dir.exists() or not oct_class_dir.exists():
                 print(f"Warning: Missing directory for class {class_name} in either fundus or OCT data")

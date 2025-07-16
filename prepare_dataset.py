@@ -32,11 +32,11 @@ class DatasetPreprocessor:
         for split in ['train', 'val', 'test']:
             for modality in ['fundus', 'oct']:
                 split_dir = self.processed_dir / split / modality
-                split_dir.mkdir(parents=True, exist_ok=True)
                 
-                # Create class directories
+                # Create class directories with 'images' subdirectory
                 for cls_name in self.class_names:
-                    (split_dir / cls_name).mkdir(exist_ok=True)
+                    class_dir = split_dir / cls_name / 'images'
+                    class_dir.mkdir(parents=True, exist_ok=True)
     
     def process_dataset(self, test_size=0.2, val_size=0.1, random_state=42):
         """
@@ -141,7 +141,7 @@ class DatasetPreprocessor:
                         continue
                         
                     cls_name = self.class_names[label]
-                    dst_dir = self.processed_dir / split_name / modality / cls_name
+                    dst_dir = self.processed_dir / split_name / modality / cls_name / 'images'
                     
                     # Copy image
                     try:
