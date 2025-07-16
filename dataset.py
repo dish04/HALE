@@ -186,7 +186,7 @@ class MultiModalEyeDataset(Dataset):
             class_idx = self.class_to_idx[class_name]
             
             # Get list of fundus and OCT images for this class
-            # Look in the 'images' subdirectory for each class
+            # The images are in class_name/images/ directory
             fundus_class_dir = self.fundus_dir / class_name / 'images'
             oct_class_dir = self.oct_dir / class_name / 'images'
             
