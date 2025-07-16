@@ -39,11 +39,23 @@ def create_data_loaders(subset_ratio=1.0):
     train_transform = get_transforms(is_training=True)
     val_transform = get_transforms(is_training=False)
     
+    # Verify dataset directory exists
+    dataset_dir = Path('dataset')
+    if not dataset_dir.exists():
+        raise FileNotFoundError(f"Dataset directory not found: {dataset_dir.absolute()}")
+    
+    print(f"Using dataset directory: {dataset_dir.absolute()}")
+    
     # Create training dataset
-    train_dataset = MultiModalEyeDataset(
-        split='train',
-        transform=train_transform
-    )
+    try:
+        train_dataset = MultiModalEyeDataset(
+            split='train',
+            transform=train_transform
+        )
+        print(f"Successfully loaded training dataset with {len(train_dataset)} samples")
+    except Exception as e:
+        print(f"Error loading training dataset: {e}")
+        raise
     
     # If subset_ratio is less than 1.0, take a subset of the data
     if subset_ratio < 1.0:
@@ -58,9 +70,11 @@ def create_data_loaders(subset_ratio=1.0):
             split='val',
             transform=val_transform
         )
-        print(f"Using separate validation set with {len(val_dataset)} samples")
-    except FileNotFoundError:
-        print("Validation set not found. Splitting training data...")
+        print(f"Successfully loaded validation dataset with {len(val_dataset)} samples")
+    except FileNotFoundError as e:
+        print(f"Validation set not found at {dataset_dir}/val. Error: {e}")
+        print("Splitting training data into train/val (80/20) instead...")
+        
         # Split the training data into train/val (80/20)
         train_size = int(0.8 * len(train_dataset))
         val_size = len(train_dataset) - train_size
@@ -69,6 +83,9 @@ def create_data_loaders(subset_ratio=1.0):
             generator=torch.Generator().manual_seed(42)  # For reproducibility
         )
         print(f"Split training data into {train_size} training and {val_size} validation samples")
+    except Exception as e:
+        print(f"Error loading validation dataset: {e}")
+        raise
     
     # Create data loaders
     train_loader = DataLoader(
