@@ -11,7 +11,7 @@ import numpy as np
 from pathlib import Path
 
 from config import config
-from dataset import MultiModalEyeDataset
+from dataset import MultiModalEyeDataset, UnpairedMultiModalEyeDataset
 from model import VisionTransformerWithGradCAM
 
 def get_transforms(is_training=False):
@@ -30,12 +30,14 @@ def get_transforms(is_training=False):
         transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
     ])
 
-def create_data_loaders(subset_ratio=1.0):
+def create_data_loaders(subset_ratio=1.0, unpaired=False):
     """Create train and validation data loaders from processed dataset
     
     Args:
         subset_ratio: float, fraction of the dataset to use (0.0 to 1.0)
+        unpaired: bool, whether to use unpaired dataset (default: False)
     """
+    print("="*80)
     print("Creating datasets...")
     train_transform = get_transforms(is_training=True)
     val_transform = get_transforms(is_training=False)
@@ -47,27 +49,95 @@ def create_data_loaders(subset_ratio=1.0):
     
     print(f"Using dataset directory: {dataset_dir.absolute()}")
     
+    # Check directory structure
+    def check_dir_structure():
+        print("\nChecking dataset directory structure...")
+        required_dirs = [
+            'train/fundus', 'train/oct',
+            'val/fundus', 'val/oct',
+            'test/fundus', 'test/oct'
+        ]
+        
+        for dir_path in required_dirs:
+            full_path = dataset_dir / dir_path
+            exists = full_path.exists()
+            print(f"  {dir_path}: {'✓' if exists else '✗'}")
+            
+            # If directory exists, list its contents
+            if exists:
+                try:
+                    class_dirs = [d.name for d in full_path.iterdir() if d.is_dir()]
+                    print(f"    Classes: {', '.join(class_dirs[:5])}{'...' if len(class_dirs) > 5 else ''} ({len(class_dirs)} total)")
+                    # Count files in first class as sample
+                    if class_dirs:
+                        sample_class = full_path / class_dirs[0]
+                        file_count = sum(1 for _ in sample_class.glob('*.*'))
+                        print(f"    Sample class '{class_dirs[0]}' has {file_count} files")
+                except Exception as e:
+                    print(f"    Error checking contents: {e}")
+    
+    check_dir_structure()
+    
     # Create training dataset
-    train_dataset = MultiModalEyeDataset(
+    print("\nLoading training dataset...")
+    dataset_class = UnpairedMultiModalEyeDataset if unpaired else MultiModalEyeDataset
+    print(f"Using {'unpaired' if unpaired else 'paired'} dataset")
+    
+    train_dataset = dataset_class(
         split='train',
         transform=train_transform
     )
     
     if len(train_dataset) == 0:
-        print("Warning: Training dataset is empty. Please check your dataset directory.")
-        print(f"Expected data in: {Path('dataset/train/fundus')} and {Path('dataset/train/oct')}")
+        print("\nERROR: Training dataset is empty. Please check:")
+        print("1. The dataset has been prepared using prepare_dataset.py")
+        print("2. The directory structure matches the expected format")
+        print("3. There are image files in the class directories")
+        print("4. File permissions allow reading the files")
+        print("\nExpected structure:")
+        print("dataset/")
+        print("├── train/")
+        print("│   ├── fundus/")
+        print("│   │   ├── normal/     # Contains .jpg, .png, etc.")
+        print("│   │   ├── damd/")
+        print("│   │   └── ...")
+        print("│   └── oct/")
+        print("│       ├── normal/     # Contains .jpg, .png, etc.")
+        print("│       ├── damd/")
+        print("│       └── ...")
+        print("└── val/...")  # Similar structure for val and test
+        
+        # Try to find any image files in the dataset directory
+        print("\nSearching for image files...")
+        img_exts = ('*.jpg', '*.jpeg', '*.png', '*.bmp', '*.tif', '*.tiff')
+        found_files = []
+        for ext in img_exts:
+            found_files.extend(dataset_dir.rglob(f'**/{ext}'))
+            found_files.extend(dataset_dir.rglob(f'**/{ext.upper()}'))
+        
+        if found_files:
+            print(f"\nFound {len(found_files)} image files in unexpected locations:")
+            for f in found_files[:5]:  # Show first 5 files as examples
+                print(f"  {f}")
+            if len(found_files) > 5:
+                print(f"  ... and {len(found_files) - 5} more")
+        else:
+            print("No image files found in the dataset directory.")
+        
+        raise RuntimeError("Failed to load training dataset")
     else:
-        print(f"Successfully loaded training dataset with {len(train_dataset)} samples")
+        print(f"\nSuccessfully loaded training dataset with {len(train_dataset)} samples")
     
     # If subset_ratio is less than 1.0, take a subset of the data
-    if subset_ratio < 1.0:
+    if subset_ratio < 1.0 and len(train_dataset) > 0:
         subset_size = int(len(train_dataset) * subset_ratio)
         indices = torch.randperm(len(train_dataset))[:subset_size]
         train_dataset = torch.utils.data.Subset(train_dataset, indices)
         print(f"Using subset of {subset_size} training samples ({subset_ratio*100:.1f}% of full dataset)")
     
     # Try to load validation set, if it exists
-    val_dataset = MultiModalEyeDataset(
+    print("\nLoading validation dataset...")
+    val_dataset = dataset_class(
         split='val',
         transform=val_transform
     )
@@ -244,6 +314,8 @@ def parse_args():
     parser = argparse.ArgumentParser(description='Train a multi-modal model on OCT and Fundus images')
     parser.add_argument('--subset_ratio', type=float, default=1.0,
                         help='Fraction of the dataset to use (0.0 to 1.0, default: 1.0)')
+    parser.add_argument('--unpaired', action='store_true',
+                        help='Use unpaired dataset (images from same class but not necessarily from same patient)')
     return parser.parse_args()
 
 def main():
@@ -270,7 +342,10 @@ def main():
     )
     
     # Data loaders
-    train_loader, val_loader = create_data_loaders(subset_ratio=args.subset_ratio)
+    train_loader, val_loader = create_data_loaders(
+        subset_ratio=args.subset_ratio,
+        unpaired=args.unpaired
+    )
     
     # Training loop
     best_acc = 0.0

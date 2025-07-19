@@ -497,6 +497,187 @@ class MultiModalEyeDataset(Dataset):
         return sample_weights
 
 
+class UnpairedMultiModalEyeDataset(Dataset):
+    """
+    Dataset class for multi-modal eye disease classification.
+    Loads unpaired fundus and OCT images from the processed dataset directory.
+    Each sample contains one fundus image and one OCT image from the same class,
+    but they don't need to be from the same patient or case.
+    """
+    def __init__(self, split='train', transform=None):
+        """
+        Args:
+            split: One of 'train', 'val', or 'test'
+            transform: Transform to be applied to images (same transform will be applied to both modalities)
+        """
+        self.split = split
+        self.transform = transform
+        
+        # Get paths for the specified split - using the new directory structure
+        dataset_root = Path('dataset')  # Assuming the dataset is in a 'dataset' directory
+        self.fundus_dir = dataset_root / split / 'fundus'
+        self.oct_dir = dataset_root / split / 'oct'
+        
+        # Verify directories exist
+        if not self.fundus_dir.exists() or not self.oct_dir.exists():
+            raise FileNotFoundError(
+                f"Dataset not found. Please run prepare_dataset.py first.\n"
+                f"Expected directories:\n"
+                f"- {self.fundus_dir}\n"
+                f"- {self.oct_dir}"
+            )
+        
+        # Define class names based on folder structure
+        self.class_names = [
+            'normal', 'damd', 'csc', 'dr',
+            'glc', 'mem', 'rvo', 'wamd'
+        ]
+        
+        # Get list of classes from both fundus and oct directories (convert to lowercase)
+        fundus_classes = set(d.name.lower() for d in self.fundus_dir.iterdir() if d.is_dir())
+        oct_classes = set(d.name.lower() for d in self.oct_dir.iterdir() if d.is_dir())
+        
+        # Only use classes that exist in both directories
+        common_classes = fundus_classes.intersection(oct_classes)
+        
+        # Define the expected class names (lowercase only)
+        expected_classes = {'normal', 'damd', 'csc', 'dr', 'glc', 'mem', 'rvo', 'wamd'}
+        
+        # Only keep classes that are in our expected set
+        self.classes = sorted(common_classes.intersection(expected_classes))
+        
+        if not self.classes:
+            print(f"Warning: No common classes found between {self.fundus_dir} and {self.oct_dir}")
+            print(f"Fundus classes: {sorted(fundus_classes)}")
+            print(f"OCT classes: {sorted(oct_classes)}")
+            # Initialize with empty samples
+            self.samples = []
+            self.class_to_idx = {}
+            print(f"Initialized empty dataset for {split} split")
+            return
+            
+        self.class_to_idx = {cls_name: i for i, cls_name in enumerate(self.classes)}
+        
+        # Load samples for each modality
+        self.fundus_samples = self._load_modality_samples('fundus')
+        self.oct_samples = self._load_modality_samples('oct')
+        
+        # Calculate total number of samples (minimum of fundus and OCT samples per class)
+        self.samples = []
+        self.class_indices = {}
+        
+        for class_name in self.classes:
+            fundus_count = len(self.fundus_samples[class_name])
+            oct_count = len(self.oct_samples[class_name])
+            min_count = min(fundus_count, oct_count)
+            
+            if min_count == 0:
+                print(f"Warning: No samples for class {class_name} in one or both modalities")
+                continue
+                
+            self.class_indices[class_name] = {
+                'start': len(self.samples),
+                'end': len(self.samples) + min_count,
+                'fundus_count': fundus_count,
+                'oct_count': oct_count
+            }
+            
+            # Add samples (pairs of fundus and OCT indices)
+            for i in range(min_count):
+                self.samples.append({
+                    'class_name': class_name,
+                    'label': self.class_to_idx[class_name],
+                    'fundus_idx': i % fundus_count,
+                    'oct_idx': i % oct_count
+                })
+        
+        if not self.samples:
+            print(f"Warning: No valid samples found in {self.fundus_dir} and {self.oct_dir}")
+            print(f"Checked classes: {self.classes}")
+            print(f"Initialized empty dataset for {split} split")
+            return
+        
+        print(f"Loaded {len(self.samples)} {split} samples with {len(self.classes)} classes")
+        print("Samples per class:")
+        for class_name in self.classes:
+            if class_name in self.class_indices:
+                idx = self.class_indices[class_name]
+                print(f"  {class_name}: {idx['end'] - idx['start']} "
+                      f"(fundus: {idx['fundus_count']}, oct: {idx['oct_count']})")
+    
+    def _load_modality_samples(self, modality):
+        """Load samples for a single modality (fundus or oct)."""
+        samples = {class_name: [] for class_name in self.classes}
+        img_extensions = ['.jpg', '.jpeg', '.png', '.bmp', '.tif', '.tiff']
+        
+        for class_name in self.classes:
+            class_dir = self.fundus_dir if modality == 'fundus' else self.oct_dir
+            class_dir = class_dir / class_name
+            
+            if not class_dir.exists():
+                print(f"Warning: {modality.upper()} directory not found for class {class_name}: {class_dir}")
+                continue
+            
+            # Find all image files in the class directory
+            for ext in img_extensions:
+                for ext_variant in [ext, ext.upper()]:
+                    pattern = f'*{ext_variant}'
+                    files = list(class_dir.glob(pattern))
+                    if files:
+                        samples[class_name].extend(sorted(f.name for f in files))
+            
+            print(f"Found {len(samples[class_name])} {modality.upper()} images for class {class_name}")
+        
+        return samples
+    
+    def __len__(self):
+        return len(self.samples)
+    
+    def __getitem__(self, idx):
+        sample = self.samples[idx]
+        class_name = sample['class_name']
+        
+        # Get random fundus and OCT paths for this class
+        fundus_path = self.fundus_dir / class_name / self.fundus_samples[class_name][sample['fundus_idx']]
+        oct_path = self.oct_dir / class_name / self.oct_samples[class_name][sample['oct_idx']]
+        
+        # Load images
+        fundus_img = Image.open(fundus_path).convert('RGB')
+        oct_img = Image.open(oct_path).convert('RGB')
+        
+        # Apply transforms if specified
+        if self.transform is not None:
+            fundus_img = self.transform(fundus_img)
+            oct_img = self.transform(oct_img)
+        
+        return (fundus_img, oct_img), (sample['label'], class_name), str(fundus_path)
+    
+    def label_statistics(self):
+        """Count number of samples per class."""
+        cls_count = {}
+        for sample in self.samples:
+            label = sample['label']
+            if label not in cls_count:
+                cls_count[label] = 0
+            cls_count[label] += 1
+        return cls_count
+            
+    def label_weights_for_balance(self):
+        """Calculate weights for class balancing."""
+        cls_count = self.label_statistics()
+        if not cls_count:
+            return []
+            
+        max_count = max(cls_count.values())
+        weights = {}
+        for cls, count in cls_count.items():
+            weights[cls] = max_count / count if count > 0 else 0.0
+            
+        # Create weights for each sample
+        sample_weights = [weights[sample['label']] for sample in self.samples]
+        return sample_weights
+
+
 def build_dataset_single(mode, args, transform=None, mod='fundus', test_file=None):
     if transform is None:
         transform = build_transform(mode, args)
@@ -507,13 +688,17 @@ def build_dataset_single(mode, args, transform=None, mod='fundus', test_file=Non
 
 
 def build_dataset_multimodal_single(mode, args, transform=None):
-    if transform is None:
-        transform = build_transform(mode, args)
-        # transform_oct = build_transform('test', args)
-        transform_oct = build_transform(mode, args)
-    f_root = os.path.join(args.data_path, mode)
-    o_root = os.path.join(args.data_path_oct, mode)
-    dataset = MultiModalSingleImageFolder(f_root, o_root, args.n_classes, mode, transform=transform, transform_oct=transform_oct)
+    if args.dataset == 'eyepacs':
+        if hasattr(args, 'unpaired') and args.unpaired:
+            dataset = UnpairedMultiModalEyeDataset(split=mode, transform=transform)
+        else:
+            dataset = MultiModalEyeDataset(split=mode, transform=transform)
+    else:
+        raise ValueError(f"Unsupported dataset: {args.dataset}")
+    
+    print(f"Loaded {mode} dataset with {len(dataset)} samples")
+    cls_count = dataset.label_statistics()
+    print("Class distribution:", cls_count)
     return dataset
 
 
