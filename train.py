@@ -194,11 +194,11 @@ def create_data_loaders(subset_ratio=1.0, unpaired=False):
     return train_loader, val_loader
 
 def train_epoch(model, dataloader, criterion, optimizer, device, scaler=None):
+    """Train for one epoch"""
     model.train()  # Set model to training mode
     if device.type == 'cuda':
         torch.cuda.empty_cache()  # Clear CUDA cache before training
-    """Train for one epoch"""
-    model.train()
+    
     running_loss = 0.0
     correct = 0
     total = 0
@@ -217,8 +217,11 @@ def train_epoch(model, dataloader, criterion, optimizer, device, scaler=None):
         
         # Mixed precision training
         with torch.cuda.amp.autocast(enabled=device.type == 'cuda'):
-            # Forward pass
-            outputs = model(fundus, oct_img)
+            # Forward pass - handle DataParallel by passing both inputs as a tuple
+            if isinstance(model, nn.DataParallel):
+                outputs = model((fundus, oct_img))
+            else:
+                outputs = model(fundus, oct_img)
             loss = criterion(outputs, labels)
         
         # Backward pass and optimize with gradient scaling for mixed precision
@@ -245,7 +248,8 @@ def train_epoch(model, dataloader, criterion, optimizer, device, scaler=None):
         # Free up GPU memory
         if batch_idx % 100 == 0 and device.type == 'cuda':
             torch.cuda.empty_cache()
-    epoch_loss = running_loss / len(dataloader.dataset) if len(dataloader.dataset) > 0 else 0
+    
+    epoch_loss = running_loss / len(dataloader) if len(dataloader) > 0 else 0
     epoch_acc = 100. * correct / total if total > 0 else 0
     return epoch_loss, epoch_acc
 
@@ -271,7 +275,11 @@ def validate(model, dataloader, criterion, device):
             
             # Forward pass with mixed precision
             with torch.cuda.amp.autocast(enabled=device.type == 'cuda'):
-                outputs = model(fundus, oct_img)
+                # Handle DataParallel by passing both inputs as a tuple
+                if isinstance(model, nn.DataParallel):
+                    outputs = model((fundus, oct_img))
+                else:
+                    outputs = model(fundus, oct_img)
                 loss = criterion(outputs, labels)
             
             # Statistics
@@ -427,6 +435,9 @@ def main():
     if torch.cuda.device_count() > 1:
         print(f"Using {torch.cuda.device_count()} GPUs!")
         model = nn.DataParallel(model)
+        # Set the first GPU as the default device
+        device = torch.device('cuda:0' if torch.cuda.is_available() else 'cpu')
+        model = model.to(device)
     
     # Loss and optimizer
     criterion = nn.CrossEntropyLoss()
