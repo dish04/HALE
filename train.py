@@ -40,7 +40,7 @@ def get_transforms(is_training=False):
         transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
     ])
 
-def create_data_loaders(subset_ratio=1.0, unpaired=False):
+def create_data_loaders(subset_ratio=1.0, unpaired=False, batch_size=16):
     """Create train and validation data loaders from processed dataset
     
     Args:
@@ -173,19 +173,21 @@ def create_data_loaders(subset_ratio=1.0, unpaired=False):
     # Create data loaders
     train_loader = DataLoader(
         train_dataset,
-        batch_size=config.batch_size,
+        batch_size=batch_size,
         shuffle=True,
         num_workers=4,
         pin_memory=True,
-        drop_last=True  # Drop last incomplete batch
+        drop_last=True,  # Drop last incomplete batch
+        persistent_workers=True  # Keep workers alive between epochs
     )
 
     val_loader = DataLoader(
         val_dataset,
-        batch_size=config.batch_size,
+        batch_size=batch_size * 2,  # Larger batch size for validation
         shuffle=False,
         num_workers=4,
-        pin_memory=True
+        pin_memory=True,
+        persistent_workers=True  # Keep workers alive between epochs
     )
     
     print(f"Created dataloaders - Train: {len(train_loader.dataset)} samples, "
@@ -193,8 +195,8 @@ def create_data_loaders(subset_ratio=1.0, unpaired=False):
     
     return train_loader, val_loader
 
-def train_epoch(model, dataloader, criterion, optimizer, device, scaler=None):
-    """Train for one epoch"""
+def train_epoch(model, dataloader, criterion, optimizer, device, scaler=None, accumulation_steps=1):
+    """Train for one epoch with gradient accumulation"""
     model.train()  # Set model to training mode
     if device.type == 'cuda':
         torch.cuda.empty_cache()  # Clear CUDA cache before training
@@ -206,32 +208,39 @@ def train_epoch(model, dataloader, criterion, optimizer, device, scaler=None):
     # Create a progress bar
     dataloader = tqdm(dataloader, desc="Training", unit="batch")
     
+    # Initialize gradient accumulation
+    optimizer.zero_grad()
+    
     for batch_idx, ((fundus, oct_img), (labels, _), _) in enumerate(dataloader):
         # Move data to the specified device
         fundus = fundus.to(device, non_blocking=True)
         oct_img = oct_img.to(device, non_blocking=True)
         labels = labels.to(device, non_blocking=True)
         
-        # Zero the parameter gradients
-        optimizer.zero_grad()
-        
         # Mixed precision training
         with torch.amp.autocast(device_type='cuda', dtype=torch.float16, enabled=device.type == 'cuda'):
-            # Forward pass - always pass inputs as separate arguments
+            # Forward pass
             outputs = model(fundus, oct_img)
-            loss = criterion(outputs, labels)
+            # Scale the loss by accumulation steps
+            loss = criterion(outputs, labels) / accumulation_steps
         
-        # Backward pass and optimize with gradient scaling for mixed precision
+        # Backward pass with gradient accumulation
         if scaler is not None:
             scaler.scale(loss).backward()
-            scaler.step(optimizer)
-            scaler.update()
         else:
             loss.backward()
-            optimizer.step()
         
-        # Statistics
-        running_loss = 0.9 * running_loss + 0.1 * loss.item()  # Smooth loss
+        # Perform optimizer step after accumulating enough gradients
+        if (batch_idx + 1) % accumulation_steps == 0 or (batch_idx + 1) == len(dataloader):
+            if scaler is not None:
+                scaler.step(optimizer)
+                scaler.update()
+            else:
+                optimizer.step()
+            optimizer.zero_grad()
+        
+        # Update statistics (scale loss back up for reporting)
+        running_loss = 0.9 * running_loss + 0.1 * (loss.item() * accumulation_steps)
         _, predicted = torch.max(outputs.data, 1)
         total += labels.size(0)
         correct += (predicted == labels).sum().item()
@@ -243,7 +252,7 @@ def train_epoch(model, dataloader, criterion, optimizer, device, scaler=None):
         })
         
         # Free up GPU memory
-        if batch_idx % 100 == 0 and device.type == 'cuda':
+        if batch_idx % 50 == 0 and device.type == 'cuda':
             torch.cuda.empty_cache()
     
     epoch_loss = running_loss / len(dataloader) if len(dataloader) > 0 else 0
@@ -393,10 +402,14 @@ def main():
         print(f"CUDA Version: {torch.version.cuda}")
         print(f"cuDNN Version: {torch.backends.cudnn.version()}")
         
-        # Set some performance flags
+            # Set performance flags and memory optimization
         torch.backends.cudnn.benchmark = True
         torch.backends.cuda.matmul.allow_tf32 = True
         torch.backends.cudnn.allow_tf32 = True
+        
+        # Set environment variable to help with memory fragmentation
+        import os
+        os.environ['PYTORCH_CUDA_ALLOC_CONF'] = 'max_split_size_mb:512,expandable_segments:True'
     
     # Initialize model
     model = VisionTransformerWithGradCAM(
@@ -431,10 +444,17 @@ def main():
         weight_decay=config.weight_decay
     )
     
+    # Reduce batch size for memory efficiency
+    effective_batch_size = 4  # Reduced from default
+    gradient_accumulation_steps = 4  # Accumulate gradients over 4 batches
+    
+    print(f"Using effective batch size: {effective_batch_size * gradient_accumulation_steps} ({effective_batch_size} x {gradient_accumulation_steps} gradient accumulation)")
+    
     # Data loaders with pin_memory for faster GPU transfer
     train_loader, val_loader = create_data_loaders(
         subset_ratio=args.subset_ratio,
-        unpaired=args.unpaired
+        unpaired=args.unpaired,
+        batch_size=effective_batch_size
     )
     
     # Move data to device in the training loop for better memory management
@@ -453,9 +473,10 @@ def main():
         print(f"\nEpoch {epoch+1}/{config.num_epochs}")
         print("-" * 20)
         
-        # Train
+        # Train with gradient accumulation
         train_loss, train_acc = train_epoch(
-            model, train_loader, criterion, optimizer, device, scaler)
+            model, train_loader, criterion, optimizer, device, scaler, 
+            accumulation_steps=gradient_accumulation_steps)
         
         # Validate
         val_loss, val_acc = validate(model, val_loader, criterion, device)
