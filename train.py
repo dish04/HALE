@@ -216,10 +216,11 @@ def train_epoch(model, dataloader, criterion, optimizer, device, scaler=None):
         optimizer.zero_grad()
         
         # Mixed precision training
-        with torch.cuda.amp.autocast(enabled=device.type == 'cuda'):
-            # Forward pass - handle DataParallel by passing both inputs as a tuple
+        with torch.amp.autocast(device_type='cuda', dtype=torch.float16, enabled=device.type == 'cuda'):
+            # Forward pass - handle DataParallel by passing both inputs as separate arguments
             if isinstance(model, nn.DataParallel):
-                outputs = model((fundus, oct_img))
+                # For DataParallel, we need to pass inputs separately
+                outputs = model(fundus, oct_img)
             else:
                 outputs = model(fundus, oct_img)
             loss = criterion(outputs, labels)
@@ -274,10 +275,10 @@ def validate(model, dataloader, criterion, device):
             labels = labels.to(device, non_blocking=True)
             
             # Forward pass with mixed precision
-            with torch.cuda.amp.autocast(enabled=device.type == 'cuda'):
-                # Handle DataParallel by passing both inputs as a tuple
+            with torch.amp.autocast(device_type='cuda', dtype=torch.float16, enabled=device.type == 'cuda'):
+                # For validation, same handling as training
                 if isinstance(model, nn.DataParallel):
-                    outputs = model((fundus, oct_img))
+                    outputs = model(fundus, oct_img)
                 else:
                     outputs = model(fundus, oct_img)
                 loss = criterion(outputs, labels)
@@ -434,10 +435,11 @@ def main():
     # Use DataParallel if multiple GPUs are available
     if torch.cuda.device_count() > 1:
         print(f"Using {torch.cuda.device_count()} GPUs!")
-        model = nn.DataParallel(model)
         # Set the first GPU as the default device
         device = torch.device('cuda:0' if torch.cuda.is_available() else 'cpu')
         model = model.to(device)
+        # Wrap with DataParallel after moving to device
+        model = nn.DataParallel(model, device_ids=list(range(torch.cuda.device_count())))
     
     # Loss and optimizer
     criterion = nn.CrossEntropyLoss()
