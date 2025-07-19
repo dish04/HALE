@@ -383,14 +383,30 @@ def main():
     args = parse_args()
     
     # Set device from config or auto-detect
-    if hasattr(config, 'device'):
-        device = config.device
+    if hasattr(config, 'device') and config.device is not None:
+        # If config.device is a string, convert it to a torch.device object
+        if isinstance(config.device, str):
+            # Validate device string
+            if config.device.startswith('cuda'):
+                if not torch.cuda.is_available():
+                    print("Warning: CUDA is not available. Falling back to CPU.")
+                    device = torch.device('cpu')
+                else:
+                    device = torch.device(config.device)
+            else:
+                device = torch.device(config.device)
+        else:
+            # If it's already a torch.device object, use it directly
+            device = config.device
     else:
+        # Auto-detect device
         device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     
     print(f"Using device: {device}")
     if device.type == 'cuda':
-        print(f"GPU: {torch.cuda.get_device_name(0)}")
+        print(f"GPU: {torch.cuda.get_device_name(device.index or 0)}")
+        print(f"CUDA Version: {torch.version.cuda}")
+        print(f"cuDNN Version: {torch.backends.cudnn.version()}")
     
     # Initialize model
     model = VisionTransformerWithGradCAM(
