@@ -10,6 +10,16 @@ import matplotlib.pyplot as plt
 import numpy as np
 from pathlib import Path
 
+# Set up CUDA if available
+device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+print(f"Using device: {device}")
+if device.type == 'cuda':
+    print(f"GPU: {torch.cuda.get_device_name(0)}")
+    print(f"CUDA version: {torch.version.cuda}")
+    print(f"PyTorch version: {torch.__version__}")
+    # Additional CUDA optimizations
+torch.backends.cudnn.benchmark = True  # Enable cuDNN benchmark for faster training
+
 from config import config
 from dataset import MultiModalEyeDataset, UnpairedMultiModalEyeDataset
 from model import VisionTransformerWithGradCAM
@@ -183,57 +193,108 @@ def create_data_loaders(subset_ratio=1.0, unpaired=False):
     
     return train_loader, val_loader
 
-def train_epoch(model, dataloader, criterion, optimizer, device):
+def train_epoch(model, dataloader, criterion, optimizer, device, scaler=None):
+    model.train()  # Set model to training mode
+    if device.type == 'cuda':
+        torch.cuda.empty_cache()  # Clear CUDA cache before training
     """Train for one epoch"""
     model.train()
     running_loss = 0.0
     correct = 0
     total = 0
     
-    for (fundus_imgs, oct_imgs), (labels, _), _ in tqdm(dataloader, desc="Training"):
-        fundus_imgs = fundus_imgs.to(device)
-        oct_imgs = oct_imgs.to(device)
-        labels = labels.to(device)
-        
-        optimizer.zero_grad()
-        outputs = model(fundus_imgs, oct_imgs)
-        loss = criterion(outputs, labels)
-        loss.backward()
-        optimizer.step()
-        
-        running_loss += loss.item()
-        _, predicted = outputs.max(1)
-        total += labels.size(0)
-        correct += predicted.eq(labels).sum().item()
+    # Create a progress bar
+    dataloader = tqdm(dataloader, desc="Training", unit="batch")
     
-    epoch_loss = running_loss / len(dataloader)
-    epoch_acc = 100. * correct / total
+    for batch_idx, ((fundus, oct_img), (labels, _), _) in enumerate(dataloader):
+        # Move data to the specified device
+        fundus = fundus.to(device, non_blocking=True)
+        oct_img = oct_img.to(device, non_blocking=True)
+        labels = labels.to(device, non_blocking=True)
+        
+        # Zero the parameter gradients
+        optimizer.zero_grad()
+        
+        # Mixed precision training
+        with torch.cuda.amp.autocast(enabled=device.type == 'cuda'):
+            # Forward pass
+            outputs = model(fundus, oct_img)
+            loss = criterion(outputs, labels)
+        
+        # Backward pass and optimize with gradient scaling for mixed precision
+        if scaler is not None:
+            scaler.scale(loss).backward()
+            scaler.step(optimizer)
+            scaler.update()
+        else:
+            loss.backward()
+            optimizer.step()
+        
+        # Statistics
+        running_loss = 0.9 * running_loss + 0.1 * loss.item()  # Smooth loss
+        _, predicted = torch.max(outputs.data, 1)
+        total += labels.size(0)
+        correct += (predicted == labels).sum().item()
+        
+        # Update progress bar
+        dataloader.set_postfix({
+            'loss': f"{running_loss:.4f}",
+            'acc': f"{(100. * correct / total):.2f}%"
+        })
+        
+        # Free up GPU memory
+        if batch_idx % 100 == 0 and device.type == 'cuda':
+            torch.cuda.empty_cache()
+    epoch_loss = running_loss / len(dataloader.dataset) if len(dataloader.dataset) > 0 else 0
+    epoch_acc = 100. * correct / total if total > 0 else 0
     return epoch_loss, epoch_acc
 
 def validate(model, dataloader, criterion, device):
-    """Validate the model"""
-    model.eval()
+    model.eval()  # Set model to evaluation mode
+    if device.type == 'cuda':
+        torch.cuda.empty_cache()  # Clear CUDA cache before validation
+    
     running_loss = 0.0
     correct = 0
     total = 0
     
+    # Disable gradient calculation for validation
     with torch.no_grad():
-        for (fundus_imgs, oct_imgs), (labels, _), _ in tqdm(dataloader, desc="Validating"):
-            fundus_imgs = fundus_imgs.to(device)
-            oct_imgs = oct_imgs.to(device)
-            labels = labels.to(device)
+        # Create a progress bar for validation
+        dataloader = tqdm(dataloader, desc="Validating", unit="batch", leave=False)
+        
+        for (fundus, oct_img), (labels, _), _ in dataloader:
+            # Move data to the specified device
+            fundus = fundus.to(device, non_blocking=True)
+            oct_img = oct_img.to(device, non_blocking=True)
+            labels = labels.to(device, non_blocking=True)
             
-            outputs = model(fundus_imgs, oct_imgs)
-            loss = criterion(outputs, labels)
+            # Forward pass with mixed precision
+            with torch.cuda.amp.autocast(enabled=device.type == 'cuda'):
+                outputs = model(fundus, oct_img)
+                loss = criterion(outputs, labels)
             
-            running_loss += loss.item()
-            _, predicted = outputs.max(1)
+            # Statistics
+            running_loss += loss.item() * fundus.size(0)
+            _, predicted = torch.max(outputs.data, 1)
             total += labels.size(0)
-            correct += predicted.eq(labels).sum().item()
+            correct += (predicted == labels).sum().item()
+            
+            # Update progress bar
+            dataloader.set_postfix({
+                'val_loss': f"{running_loss/total:.4f}",
+                'val_acc': f"{(100. * correct / total):.2f}%"
+            })
     
-    epoch_loss = running_loss / len(dataloader)
-    epoch_acc = 100. * correct / total
-    return epoch_loss, epoch_acc
+    # Calculate final metrics
+    avg_loss = running_loss / total if total > 0 else 0
+    accuracy = 100. * correct / total if total > 0 else 0
+    
+    # Free up GPU memory
+    if device.type == 'cuda':
+        torch.cuda.empty_cache()
+    
+    return avg_loss, accuracy
 
 def save_checkpoint(model, optimizer, epoch, is_best=False):
     """Save model checkpoint"""
@@ -321,6 +382,16 @@ def parse_args():
 def main():
     args = parse_args()
     
+    # Set device from config or auto-detect
+    if hasattr(config, 'device'):
+        device = config.device
+    else:
+        device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+    
+    print(f"Using device: {device}")
+    if device.type == 'cuda':
+        print(f"GPU: {torch.cuda.get_device_name(0)}")
+    
     # Initialize model
     model = VisionTransformerWithGradCAM(
         image_size=config.image_size,
@@ -331,7 +402,15 @@ def main():
         heads=config.heads,
         mlp_dim=config.mlp_dim,
         dropout=config.dropout
-    ).to(config.device)
+    )
+    
+    # Move model to the specified device
+    model = model.to(device)
+    
+    # Use DataParallel if multiple GPUs are available
+    if torch.cuda.device_count() > 1:
+        print(f"Using {torch.cuda.device_count()} GPUs!")
+        model = nn.DataParallel(model)
     
     # Loss and optimizer
     criterion = nn.CrossEntropyLoss()
@@ -341,27 +420,41 @@ def main():
         weight_decay=config.weight_decay
     )
     
-    # Data loaders
+    # Data loaders with pin_memory for faster GPU transfer
     train_loader, val_loader = create_data_loaders(
         subset_ratio=args.subset_ratio,
         unpaired=args.unpaired
     )
     
+    # Move data to device in the training loop for better memory management
+    
     # Training loop
     best_acc = 0.0
+    
+    # Learning rate scheduler
+    scheduler = optim.lr_scheduler.ReduceLROnPlateau(
+        optimizer, mode='max', factor=0.5, patience=5, verbose=True)
+    
+    # Mixed precision training
+    scaler = torch.cuda.amp.GradScaler(enabled=device.type == 'cuda')
+    
     for epoch in range(config.num_epochs):
         print(f"\nEpoch {epoch+1}/{config.num_epochs}")
         print("-" * 20)
         
         # Train
         train_loss, train_acc = train_epoch(
-            model, train_loader, criterion, optimizer, config.device)
+            model, train_loader, criterion, optimizer, device, scaler)
         
         # Validate
-        val_loss, val_acc = validate(model, val_loader, criterion, config.device)
+        val_loss, val_acc = validate(model, val_loader, criterion, device)
+        
+        # Update learning rate
+        scheduler.step(val_acc)
         
         print(f"Train Loss: {train_loss:.4f} | Train Acc: {train_acc:.2f}%")
         print(f"Val Loss: {val_loss:.4f} | Val Acc: {val_acc:.2f}%")
+        print(f"Learning Rate: {optimizer.param_groups[0]['lr']:.2e}")
         
         # Save checkpoint
         is_best = val_acc > best_acc
@@ -370,6 +463,10 @@ def main():
             save_checkpoint(model, optimizer, epoch, is_best=True)
         else:
             save_checkpoint(model, optimizer, epoch, is_best=False)
+            
+        # Clear CUDA cache
+        if device.type == 'cuda':
+            torch.cuda.empty_cache()
     
     print(f"\nTraining complete. Best validation accuracy: {best_acc:.2f}%")
 
