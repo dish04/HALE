@@ -217,12 +217,8 @@ def train_epoch(model, dataloader, criterion, optimizer, device, scaler=None):
         
         # Mixed precision training
         with torch.amp.autocast(device_type='cuda', dtype=torch.float16, enabled=device.type == 'cuda'):
-            # Forward pass - handle DataParallel by passing both inputs as separate arguments
-            if isinstance(model, nn.DataParallel):
-                # For DataParallel, we need to pass inputs separately
-                outputs = model(fundus, oct_img)
-            else:
-                outputs = model(fundus, oct_img)
+            # Forward pass - always pass inputs as separate arguments
+            outputs = model(fundus, oct_img)
             loss = criterion(outputs, labels)
         
         # Backward pass and optimize with gradient scaling for mixed precision
@@ -276,11 +272,7 @@ def validate(model, dataloader, criterion, device):
             
             # Forward pass with mixed precision
             with torch.amp.autocast(device_type='cuda', dtype=torch.float16, enabled=device.type == 'cuda'):
-                # For validation, same handling as training
-                if isinstance(model, nn.DataParallel):
-                    outputs = model(fundus, oct_img)
-                else:
-                    outputs = model(fundus, oct_img)
+                outputs = model(fundus, oct_img)
                 loss = criterion(outputs, labels)
             
             # Statistics
@@ -391,31 +383,20 @@ def parse_args():
 def main():
     args = parse_args()
     
-    # Set device from config or auto-detect
-    if hasattr(config, 'device') and config.device is not None:
-        # If config.device is a string, convert it to a torch.device object
-        if isinstance(config.device, str):
-            # Validate device string
-            if config.device.startswith('cuda'):
-                if not torch.cuda.is_available():
-                    print("Warning: CUDA is not available. Falling back to CPU.")
-                    device = torch.device('cpu')
-                else:
-                    device = torch.device(config.device)
-            else:
-                device = torch.device(config.device)
-        else:
-            # If it's already a torch.device object, use it directly
-            device = config.device
-    else:
-        # Auto-detect device
-        device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-    
+    # Set device to use first available GPU or CPU
+    device = torch.device('cuda:0' if torch.cuda.is_available() else 'cpu')
     print(f"Using device: {device}")
+    
+    # Print GPU information if available
     if device.type == 'cuda':
-        print(f"GPU: {torch.cuda.get_device_name(device.index or 0)}")
+        print(f"GPU: {torch.cuda.get_device_name(0)}")
         print(f"CUDA Version: {torch.version.cuda}")
         print(f"cuDNN Version: {torch.backends.cudnn.version()}")
+        
+        # Set some performance flags
+        torch.backends.cudnn.benchmark = True
+        torch.backends.cuda.matmul.allow_tf32 = True
+        torch.backends.cudnn.allow_tf32 = True
     
     # Initialize model
     model = VisionTransformerWithGradCAM(
@@ -432,14 +413,15 @@ def main():
     # Move model to the specified device
     model = model.to(device)
     
-    # Use DataParallel if multiple GPUs are available
+    # For now, let's use a single GPU to avoid DataParallel issues
+    # You can re-enable multi-GPU later once we confirm single-GPU works
     if torch.cuda.device_count() > 1:
-        print(f"Using {torch.cuda.device_count()} GPUs!")
-        # Set the first GPU as the default device
-        device = torch.device('cuda:0' if torch.cuda.is_available() else 'cpu')
-        model = model.to(device)
-        # Wrap with DataParallel after moving to device
-        model = nn.DataParallel(model, device_ids=list(range(torch.cuda.device_count())))
+        print(f"Warning: Multi-GPU support is temporarily disabled. Using only 1 GPU.")
+    
+    # Use the first available GPU or fall back to CPU
+    device = torch.device('cuda:0' if torch.cuda.is_available() else 'cpu')
+    print(f"Using device: {device}")
+    model = model.to(device)
     
     # Loss and optimizer
     criterion = nn.CrossEntropyLoss()
